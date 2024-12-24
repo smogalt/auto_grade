@@ -90,7 +90,7 @@ func main() {
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 
-			cmd := exec.Command("python3.11", e.Name()+"/"+programs[index].Name(), tests_line.Text())
+			cmd := exec.Command("python3", e.Name()+"/"+programs[index].Name(), tests_line.Text())
 			cmd.Stdout = &stdout
 			cmd.Stderr = &stderr
 			err = cmd.Run()
