@@ -9,7 +9,3 @@ all packages are in the standard library. install with ```go install github.com/
 ```-a```	path to file containing expected responses. one per line
 
 ```-t```	path to file containing tests. one per line
-
-```-pr```	show the pass rates for each test
-
-```-af```	show tests that all programs failed

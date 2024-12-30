@@ -9,40 +9,56 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"sort"
 	"strings"
+	"sync"
 )
 
 func main() {
+	/* define and parse arguments */
 	verbose := flag.Bool("v", false, "shows what testcases failed")
-	pass_rate := flag.Bool("pr", false, "provides detailed information on the pass rates of tests")
-	tests_fn := flag.String("t", "tests.txt", "filename for tests")
-	answers_fn := flag.String("a", "answers.txt", "filename for answer key")
-	all_fail := flag.Bool("af", false, "shows test cases where all programs failed")
+	test_fn := flag.String("t", "tests.txt", "filename for tests")
+	answer_fn := flag.String("a", "answers.txt", "filename for answer key")
 	flag.Parse()
 
-	/* open file with tests */
-	tests, err := os.Open(*tests_fn)
+	/* open files with tests and answers*/
+	test_file, err := os.Open(*test_fn)
+
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer tests.Close()
-	tests_line := bufio.NewScanner(tests)
+	test_file_size := count_lines(test_file)
 
-	/* open file with answers */
-	answers, err := os.Open(*answers_fn)
+	answer_file, err := os.Open(*answer_fn)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer answers.Close()
-	answers_line := bufio.NewScanner(answers)
+	answer_file_size := count_lines(answer_file)
 
-	/* check to make sure each test has a response */
-	if count_lines(answers) != count_lines(tests) {
+	/* check to make sure each test has a answer */
+	if answer_file_size != test_file_size {
 		log.Fatal("Unequal amount of tests and responses.")
 	}
 
-	/* list all dirs under given dir */
+	/* load tests and answers */
+	var tests, answers []string
+	tests = make([]string, test_file_size, test_file_size)
+	answers = make([]string, answer_file_size, answer_file_size)
+
+	tests_line := bufio.NewScanner(test_file)
+	answers_line := bufio.NewScanner(answer_file)
+
+	for i := range tests {
+		tests_line.Scan()
+		answers_line.Scan()
+		tests[i] = tests_line.Text()
+		answers[i] = answers_line.Text()
+	}
+
+	test_file.Close()
+	answer_file.Close()
+	/* don't need the files open past here */
+
+	/* list all dirs under working directory */
 	dirs, err := os.ReadDir("./")
 	if err != nil {
 		log.Fatal(err)
@@ -51,106 +67,78 @@ func main() {
 	/* regexp to check for .py fils in the dir */
 	var valid_py = regexp.MustCompile(`.*py$`)
 
-	/* create map with scores and directory names */
-	var report map[string]int
-	report = make(map[string]int)
+	/* create slice for scores */
+	var scores []int
+	scores = make([]int, len(dirs), len(dirs))
 
-	var test_report map[int]int
-	test_report = make(map[int]int)
-	passed := 0
+	/* one goroutine for each directory */
+	var wait_group sync.WaitGroup
+	wait_group.Add(len(dirs))
 
-	tests_num := 0
 	/* for each test case */
-	for tests_line.Scan() {
-		passed = 0
-		tests_num++
-		answers_line.Scan()
-		/* for each dir */
-		for _, e := range dirs {
-			/* list all files under e */
-			programs, err := os.ReadDir("./" + e.Name())
+	for n, d := range dirs {
+		cur_dir := n
+		cur_dir_name := d.Name()
+		go func() {
+			defer wait_group.Done()
+
+			/* list all files under dir */
+			programs, err := os.ReadDir("./" + cur_dir_name)
 			if err != nil {
 				log.Fatal(err)
 			}
-			if len(programs) == 0 {
-				report[e.Name()] += 0
-				continue
-			}
+			if len(programs) != 0 {
+				scores[cur_dir] += 0
 
-			/* find first valid .py file under e */
-			index := 0
-			for i, p := range programs {
-				if valid_py.MatchString(p.Name()) {
-					index = i
-					break
+				/* find first valid .py file under the current dir */
+				index := 0
+				for i, p := range programs {
+					if valid_py.MatchString(p.Name()) {
+						index = i
+						break
+					}
+				}
+
+				for test_num := range tests {
+					/* run given .py files with input */
+					var stdout bytes.Buffer
+					var stderr bytes.Buffer
+
+					cmd := exec.Command("python3", cur_dir_name+"/"+programs[index].Name(), tests[test_num])
+					cmd.Stdout = &stdout
+					cmd.Stderr = &stderr
+					err = cmd.Run()
+					if err != nil {
+						fmt.Println(stderr.String())
+						log.Fatal(err)
+					}
+
+					stdout_string := stdout.String()
+					stdout_string = strings.TrimSuffix(stdout_string, "\n")
+
+					if stdout_string != answers[test_num] {
+						scores[cur_dir] += 0
+						if *verbose {
+							fmt.Println(cur_dir_name, "failed: test", test_num + 1)
+							fmt.Println("\texpected response:", answers[test_num])
+							fmt.Println("\tresponse:", stdout_string)
+							fmt.Println()
+						}
+					} else {
+						scores[cur_dir]++
+					}
 				}
 			}
-
-			/* run given .py files with input */
-			var stdout bytes.Buffer
-			var stderr bytes.Buffer
-
-			cmd := exec.Command("python3", e.Name()+"/"+programs[index].Name(), tests_line.Text())
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-			err = cmd.Run()
-			if err != nil {
-				fmt.Println(stderr.String())
-				log.Fatal(err)
-			}
-
-			stdout_string := stdout.String()
-			stdout_string = strings.TrimSuffix(stdout_string, "\n")
-
-			if stdout_string != answers_line.Text() {
-				report[e.Name()] += 0
-				if *verbose {
-					fmt.Println(e.Name(), "failed: test", tests_num)
-					fmt.Println("\texpected response:", answers_line.Text())
-					fmt.Println("\tresponse:", stdout_string)
-					fmt.Println()
-				}
-			} else {
-				report[e.Name()]++
-				passed++
-			}
-		}
-		test_report[tests_num] += passed
+		}()
 	}
 
-	/* print names and scores. extra stuff is to sort the map */
-	names := make([]string, 0, len(report))
-	for k := range report {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	for _, k := range names {
-		fmt.Printf("%s %d%%\n", k, report[k]*100/tests_num)
+	wait_group.Wait()
+
+	for i, _ := range dirs {
+		fmt.Printf("%s %d%%\n", dirs[i].Name(), (scores[i]*100)/len(tests))
 	}
 
-	/* print the pass rates of individual tests */
-	if *pass_rate {
-		fmt.Println("pass rates:")
-		keys := make([]int, 0, len(test_report))
-		for k := range test_report {
-			keys = append(keys, k)
-		}
-		sort.Ints(keys)
-
-		for _, k := range keys {
-			fmt.Printf("\t %d %d%%\n", k, (test_report[k]*100)/len(dirs))
-		}
-	}
-
-	/* print tests that all programs failed */
-	if *all_fail {
-		fmt.Println("unsuccessful tests:")
-		for k, v := range test_report {
-			if v == 0 {
-				fmt.Println("\t", k)
-			}
-		}
-	}
+	return
 }
 
 func count_lines(f *os.File) int {
