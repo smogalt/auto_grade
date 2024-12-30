@@ -119,7 +119,7 @@ func main() {
 					if stdout_string != answers[test_num] {
 						scores[cur_dir] += 0
 						if *verbose {
-							fmt.Println(cur_dir_name, "failed: test", test_num + 1)
+							fmt.Println(cur_dir_name, "failed: test", test_num+1)
 							fmt.Println("\texpected response:", answers[test_num])
 							fmt.Println("\tresponse:", stdout_string)
 							fmt.Println()
